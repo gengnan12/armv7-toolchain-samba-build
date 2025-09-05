@@ -1,73 +1,29 @@
-name: Build ARMv7 Toolchain (Buildroot 2017.11.1)
-on:
-  workflow_dispatch:  # 手动触发（工具链编译耗时约1.5小时）
+          echo "===== 交换分区创建完成 ====="
 
-jobs:
-  build-toolchain:
-    runs-on: ubuntu-20.04  # 兼容 Buildroot 2017.11.1 编译需求
-    steps:
-      # 步骤1：拉取仓库代码
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 步骤2：安装 Buildroot 依赖（必装，否则编译失败）
-      - name: Install Buildroot dependencies
+      - name: Build toolchain (with progress)
         run: |
-          sudo apt update
-          sudo apt install -y build-essential git wget cpio unzip rsync bc \
-                              flex bison libssl-dev python2.7-dev
-
-      # 步骤3：下载 Buildroot 2017.11.1 源码（官方稳定版）
-      - name: Download Buildroot 2017.11.1
-        run: |
-          wget https://buildroot.org/downloads/buildroot-2017.11.1.tar.gz
-          tar -xzf buildroot-2017.11.1.tar.gz
+          echo "===== 开始编译工具链（预计1-2小时） ====="
           cd buildroot-2017.11.1
-# 在 "Download Buildroot 2017.11.1" 步骤后新增
-- name: Configure domestic mirrors (加速依赖下载)
-  run: |
-    cd buildroot-2017.11.1
-    # 替换为国内镜像（如清华源）
-    echo 'BR2_PRIMARY_SITE="https://mirror.tuna.tsinghua.edu.cn/buildroot"' >> .config
-    echo 'BR2_BACKUP_SITE="http://sources.buildroot.net"' >> .config
-    make oldconfig
-      # 步骤4：配置 ARMv7 工具链（关键！适配 armv7l 架构）
-      - name: Configure ARMv7 Toolchain
-        run: |
-          cd buildroot-2017.11.1
-          # 写入 ARMv7 专用配置（uClibc 为嵌入式常用 libc，若设备用 glibc 需改 BR2_GLIBC=y）
-          cat > .config << EOF
-          BR2_arm=y                          # 目标架构：ARM
-          BR2_cortex_a7=y                    # 适配 ARMv7 常见核心（若设备是 cortex-a9，可改为 BR2_cortex_a9=y）
-          BR2_ARM_EABIHF=y                   # 启用硬浮点（ARMv7 设备主流配置）
-          BR2_TOOLCHAIN_BUILDROOT=y          # 使用 Buildroot 构建工具链
-          BR2_GCC_VERSION_5_X=y              # 匹配设备的 GCC 5.5.0
-          BR2_UCLIBC=y                       # 嵌入式精简 libc（若设备用 glibc，替换为 BR2_GLIBC=y）
-          BR2_TOOLCHAIN_EXTERNAL=y           # 生成独立可复用的工具 
-          BR2_TOOLCHAIN_OPTIMIZATION_SIZE=y    # 安装 C++ 库（Samba 依赖）
-          BR2_TOOLCHAIN_PTHREADS=y           # 支持多线程（Samba 需多线程）
-          BR2_TOOLCHAIN_NO_SSP=y             # 禁用栈保护（旧内核兼容）
-          EOF
-          # 加载配置（自动处理依赖项）
-          make oldconfig
+          export FORCE_UNSAFE_CONFIGURE=1
+          # 拆分编译步骤，每步输出进度
+          make toolchain -j2 V=1  # V=1 显示详细编译日志
+          if [ $? -eq 0 ]; then
+            echo "===== 工具链编译成功 ====="
+          else
+            echo "===== 工具链编译失败 ====="
+            exit 1
+          fi
 
-      # 步骤5：编译工具链（多线程加速，约1.5小时）
-      - name: Build ARMv7 Toolchain
+      - name: Package toolchain
         run: |
-          cd buildroot-2017.11.1
-          export FORCE_UNSAFE_CONFIGURE=1  # 解决 GitHub 环境权限问题
-          make toolchain -j2        # 用全部 CPU 核心编译
-
-      # 步骤6：打包工具链（便于后续 Samba 编译使用）
-      - name: Package Toolchain
-        run: |
+          echo "===== 开始打包工具链 ====="
           cd buildroot-2017.11.1/output/host
-          tar -czf ../../../armv7-toolchain.tar.gz *  # 打包工具链到根目录
+          tar -czf ../../../armv7-toolchain.tar.gz *
+          echo "===== 工具链打包完成 ====="
 
-      # 步骤7：上传工具链到 Artifacts（保留30天）
-      - name: Upload Toolchain
+      - name: Upload toolchain
         uses: actions/upload-artifact@v4
         with:
-          name: armv7-toolchain  # 工具链包名称
+          name: armv7-toolchain
           path: buildroot-2017.11.1/armv7-toolchain.tar.gz
           retention-days: 30
