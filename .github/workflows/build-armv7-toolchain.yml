@@ -4,7 +4,7 @@ on:
 
 jobs:
   build-toolchain:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180  # 延长超时时间至3小时
     steps:
       - name: Checkout code
