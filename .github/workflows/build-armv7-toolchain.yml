@@ -27,7 +27,7 @@ jobs:
         run: |
           echo "===== 下载 Buildroot 源码 ====="
           for i in {1..3}; do
-            if wget --timeout=600 --tries=3 https://mirror.tuna.tsinghua.edu.cn/buildroot/buildroot-2017.11.1.tar.gz; then
+            if wget --timeout=600 --tries=3 https://buildroot.org/downloads/buildroot-2017.11.1.tar.gz; then
               echo "下载成功"
               break
             else
