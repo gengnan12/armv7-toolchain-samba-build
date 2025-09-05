@@ -1,3 +1,57 @@
+name: Build ARMv7 Toolchain (with progress)
+on:
+  workflow_dispatch:
+
+jobs:
+  build-toolchain:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 180  # 延长超时时间至3小时
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          echo "===== 开始安装依赖 ====="
+          sudo apt update -y
+          sudo apt install -y build-essential git wget cpio unzip rsync bc \
+                              flex bison libssl-dev python2.7-dev
+          echo "===== 依赖依赖安装完成 ====="
+
+      - name: Download Buildroot
+        run: |
+          echo "===== 开始下载 Buildroot 源码 ====="
+          wget -v https://buildroot.org/downloads/buildroot-2017.11.1.tar.gz  # 显示下载进度
+          tar -xzf buildroot-2017.11.1.tar.gz
+          cd buildroot-2017.11.1
+          echo "===== Buildroot 源码下载完成 ====="
+
+      - name: Configure toolchain
+        run: |
+          echo "===== 开始配置工具链 ====="
+          cd buildroot-2017.11.1
+          cat > .config << EOF
+          BR2_arm=y
+          BR2_cortex_a7=y
+          BR2_ARM_EABIHF=y
+          BR2_TOOLCHAIN_BUILDROOT=y
+          BR2_GCC_VERSION_5_X=y
+          BR2_UCLIBC=y
+          BR2_TOOLCHAIN_EXTERNAL=y
+          BR2_TOOLCHAIN_PTHREADS=y
+          BR2_TOOLCHAIN_NO_SSP=y
+          EOF
+          make oldconfig
+          echo "===== 工具链配置完成 ====="
+
+      - name: Add swap space
+        run: |
+          echo "===== 开始创建交换分区 ====="
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h  # 显示内存状态
           echo "===== 交换分区创建完成 ====="
 
       - name: Build toolchain (with progress)
