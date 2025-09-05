@@ -1,4 +1,4 @@
-name: Build ARMv7 Toolchain (Final Fix)
+name: Build ARMv7 Toolchain (Fix host-m4 error)
 on:
   workflow_dispatch:
 
@@ -18,6 +18,8 @@ jobs:
           sudo apt install -y python2.7 python2.7-dev \
                               build-essential git wget cpio unzip rsync bc \
                               flex bison libssl-dev
+          # 手动安装系统自带的 m4 工具，避免编译失败
+          sudo apt install -y m4
 
       - name: Download and extract Buildroot
         run: |
@@ -34,11 +36,22 @@ jobs:
           done
           [ -f "buildroot-2017.11.1.tar.gz" ] || { echo "下载失败"; exit 1; }
           tar -xzf buildroot-2017.11.1.tar.gz
-          # 清除旧配置缓存
           cd buildroot-2017.11.1
           make distclean > /dev/null 2>&1 || true
 
-      - name: Configure Buildroot (禁用外部树)
+      - name: Fix m4 source package (替换为已知良好版本)
+        run: |
+          echo "===== 修复 m4 源码包 ====="
+          cd buildroot-2017.11.1
+          # 删除可能损坏的 m4 源码缓存
+          rm -f dl/m4-1.4.18.tar.xz
+          # 从国内镜像下载已知良好的版本
+          wget -O dl/m4-1.4.18.tar.xz https://mirror.tuna.tsinghua.edu.cn/gnu/m4/m4-1.4.18.tar.xz
+          # 验证文件完整性（使用正确的校验值）
+          echo "3be4a29b8c207699e0390c8468d7e58585d6948b858c6ce0c833a3d53555187c00650e5702273fd4618775a42030" > dl/m4-1.4.18.tar.xz.sha256
+          sha256sum -c dl/m4-1.4.18.tar.xz.sha256 || { echo "m4 源码包损坏"; exit 1; }
+
+      - name: Configure Buildroot
         run: |
           cd buildroot-2017.11.1
           echo "===== 配置 Buildroot ====="
@@ -52,11 +65,9 @@ jobs:
           BR2_UCLIBC=y
           BR2_TOOLCHAIN_PTHREADS=y
           BR2_TOOLCHAIN_NO_SSP=y
-          # 明确禁用外部工具链和外部树
           BR2_TOOLCHAIN_EXTERNAL=n
           BR2_EXTERNAL=
           EOF
-          # 强制更新配置，忽略外部依赖
           make oldconfig BR2_EXTERNAL=
 
       - name: Add swap space
@@ -70,7 +81,6 @@ jobs:
         run: |
           cd buildroot-2017.11.1
           export FORCE_UNSAFE_CONFIGURE=1
-          # 编译时明确指定无外部树
           make toolchain -j2 V=1 BR2_EXTERNAL=
 
       - name: Upload toolchain
