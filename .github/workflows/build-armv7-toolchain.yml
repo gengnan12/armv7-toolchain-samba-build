@@ -23,7 +23,14 @@ jobs:
           wget https://buildroot.org/downloads/buildroot-2017.11.1.tar.gz
           tar -xzf buildroot-2017.11.1.tar.gz
           cd buildroot-2017.11.1
-
+# 在 "Download Buildroot 2017.11.1" 步骤后新增
+- name: Configure domestic mirrors (加速依赖下载)
+  run: |
+    cd buildroot-2017.11.1
+    # 替换为国内镜像（如清华源）
+    echo 'BR2_PRIMARY_SITE="https://mirror.tuna.tsinghua.edu.cn/buildroot"' >> .config
+    echo 'BR2_BACKUP_SITE="http://sources.buildroot.net"' >> .config
+    make oldconfig
       # 步骤4：配置 ARMv7 工具链（关键！适配 armv7l 架构）
       - name: Configure ARMv7 Toolchain
         run: |
@@ -36,9 +43,8 @@ jobs:
           BR2_TOOLCHAIN_BUILDROOT=y          # 使用 Buildroot 构建工具链
           BR2_GCC_VERSION_5_X=y              # 匹配设备的 GCC 5.5.0
           BR2_UCLIBC=y                       # 嵌入式精简 libc（若设备用 glibc，替换为 BR2_GLIBC=y）
-          BR2_TOOLCHAIN_EXTERNAL=y           # 生成独立可复用的工具链
-          BR2_PACKAGE_HOST_GDB=y             # 可选：包含 GDB 调试工具
-          BR2_INSTALL_LIBSTDCPP=y            # 安装 C++ 库（Samba 依赖）
+          BR2_TOOLCHAIN_EXTERNAL=y           # 生成独立可复用的工具 
+          BR2_TOOLCHAIN_OPTIMIZATION_SIZE=y    # 安装 C++ 库（Samba 依赖）
           BR2_TOOLCHAIN_PTHREADS=y           # 支持多线程（Samba 需多线程）
           BR2_TOOLCHAIN_NO_SSP=y             # 禁用栈保护（旧内核兼容）
           EOF
@@ -50,7 +56,7 @@ jobs:
         run: |
           cd buildroot-2017.11.1
           export FORCE_UNSAFE_CONFIGURE=1  # 解决 GitHub 环境权限问题
-          make toolchain -j$(nproc)        # 用全部 CPU 核心编译
+          make toolchain -j2        # 用全部 CPU 核心编译
 
       # 步骤6：打包工具链（便于后续 Samba 编译使用）
       - name: Package Toolchain
