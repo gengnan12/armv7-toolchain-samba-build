@@ -29,21 +29,22 @@ jobs:
           cd samba-$SAMBA_VERSION
           ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
-      - name: Configure Samba for ARMv7 (修复systemd选项)
+      - name: Configure Samba for ARMv7 (修复prefix和FHS模式)
         run: |
           echo "===== 配置Samba ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
           ./configure \
             --host=arm-linux-gnueabihf \
-            --prefix=/usr \
+            --prefix=/usr \                  # 保留/usr路径
+            --enable-fhs \                   # 关键修复：启用FHS模式，允许prefix=/usr
             --sysconfdir=/etc/samba \
             --localstatedir=/var \
             --with-privatedir=/var/lib/samba/private \
             --disable-python \
             --without-ldap \
             --without-ad-dc \
-            --with-systemd \  # 修复：移除参数值，仅保留选项
+            --without-systemd \              # 正确禁用systemd（开关型选项）
             --without-winbind \
             CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
             LDFLAGS="-static-libgcc -static-libstdc++"
