@@ -1,91 +1,100 @@
-name: Build ARMv7 Toolchain (Ubuntu 18.04 + Bypass host-m4)
+name: Build Samba with ARM Official Toolchain
 on:
   workflow_dispatch:
 
 jobs:
-  build-toolchain:
-    runs-on: ubuntu-18.04  # 更换为 Ubuntu 18.04 LTS
-    timeout-minutes: 180
+  build-samba:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies (适配 Ubuntu 18.04)
+      - name: Install system dependencies
         run: |
-          echo "===== 安装依赖 ====="
-          # Ubuntu 18.04 默认包含 Python 2.7，无需额外添加源
+          echo "===== 安装系统依赖 ====="
           sudo apt update -y
-          # 安装系统 m4 + 编译依赖（18.04 源中包名与 20.04 一致）
-          sudo apt install -y m4 python2.7 python2.7-dev \
-                              build-essential git wget cpio unzip rsync bc \
-                              flex bison libssl-dev
+          # 修复 libssl-dev-dev 为正确的 libssl-dev
+          sudo apt install -y python3 python3-dev libssl-dev pkg-config \
+                              wget tar xz-utils
 
-      - name: Download and extract Buildroot
+      - name: Download ARMv7 toolchain (with fallback)
         run: |
-          echo "===== 下载并解压 Buildroot ====="
-          OFFICIAL_URL="https://buildroot.org/downloads/buildroot-2017.11.1.tar.gz"
-          for i in {1..3}; do
-            if wget --timeout=600 --tries=3 $OFFICIAL_URL; then
-              echo "下载成功"
+          echo "===== 下载ARMv7工具链 ====="
+          TOOLCHAIN_URLS=(
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://mirrors.tuna.tsinghua.edu.cn/armbian-releases/_toolchains/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+          )
+          
+          for url in "${TOOLCHAIN_URLS[@]}"; do
+            echo "尝试从 $url 下载..."
+            if wget -q --show-progress -O arm-toolchain.tar.xz "$url" --timeout=300; then
+              echo "工具链下载成功"
               break
-            else
-              echo "第 $i 次失败，重试..."
-              sleep 10
             fi
           done
-          [ -f "buildroot-2017.11.1.tar.gz" ] || { echo "Buildroot 下载失败"; exit 1; }
-          tar -xzf buildroot-2017.11.1.tar.gz
-          cd buildroot-2017.11.1
-          make distclean > /dev/null 2>&1 || true
-
-      - name: Bypass host-m4 compilation (关键修复)
-        run: |
-          echo "===== 绕过 host-m4 编译 ====="
-          cd buildroot-2017.11.1
-          # 1. 创建 m4 编译完成标记，欺骗 Buildroot 跳过编译
-          mkdir -p output/build/host-m4-1.4.18/
-          touch output/build/host-m4-1.4.18/.stamp_installed
-          touch output/build/host-m4-1.4.18/.stamp_built
-          touch output/build/host-m4-1.4.18/.stamp_extracted
           
-          # 2. 移除 Makefile 中对 host-m4 的依赖检查
-          sed -i 's/host-m4 //' package/Makefile.in
+          if [ ! -f "arm-toolchain.tar.xz" ]; then
+            echo "错误：所有链接均下载失败"
+            exit 1
+          fi
+          
+          sudo mkdir -p /opt/arm-toolchain
+          sudo tar -xJf arm-toolchain.tar.xz -C /opt/arm-toolchain --strip-components=1
+          echo "/opt/arm-toolchain/bin" >> $GITHUB_PATH
+          arm-linux-gnueabihf-gcc --version || { echo "工具链安装失败"; exit 1; }
 
-      - name: Configure Buildroot
+      - name: Download Samba source code
         run: |
-          cd buildroot-2017.11.1
-          echo "===== 配置 Buildroot ====="
-          cat > .config << EOF
-          BR2_HAVE_DOT_CONFIG=y
-          BR2_arm=y
-          BR2_cortex_a7=y
-          BR2_ARM_EABIHF=y
-          BR2_TOOLCHAIN_BUILDROOT=y
-          BR2_GCC_VERSION_5_X=y
-          BR2_UCLIBC=y
-          BR2_TOOLCHAIN_PTHREADS=y
-          BR2_TOOLCHAIN_NO_SSP=y
-          BR2_TOOLCHAIN_EXTERNAL=n
-          BR2_EXTERNAL=
-          EOF
-          make oldconfig BR2_EXTERNAL=
+          echo "===== 下载Samba源码 ====="
+          SAMBA_VERSION="4.20.0"
+          wget -q --show-progress https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz
+          tar -xzf samba-$SAMBA_VERSION.tar.gz
+          cd samba-$SAMBA_VERSION
+          ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
-      - name: Add swap space (18.04 同样需要避免内存不足)
+      - name: Configure Samba for ARMv7
         run: |
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          echo "===== 配置Samba ====="
+          SAMBA_VERSION="4.20.0"
+          cd samba-$SAMBA_VERSION
+          ./configure \
+            --host=arm-linux-gnueabihf \
+            --prefix=/usr \
+            --sysconfdir=/etc/samba \
+            --localstatedir=/var \
+            --with-privatedir=/var/lib/samba/private \
+            --disable-python \
+            --without-ldap \
+            --without-ad-dc \
+            --with-systemd=no \
+            --without-winbind \
+            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
+            LDFLAGS="-static-libgcc -static-libstdc++"
 
-      - name: Build toolchain
+      - name: Compile Samba
         run: |
-          cd buildroot-2017.11.1
-          export FORCE_UNSAFE_CONFIGURE=1
-          make toolchain -j2 V=1 BR2_EXTERNAL=
+          echo "===== 编译Samba ====="
+          SAMBA_VERSION="4.20.0"
+          cd samba-$SAMBA_VERSION
+          make smbd -j2 V=1
+          make nmbd -j2 V=1
+          make smbpasswd -j2 V=1
 
-      - name: Upload toolchain
+      - name: Verify compiled binaries
+        run: |
+          echo "===== 验证编译结果 ====="
+          SAMBA_VERSION="4.20.0"
+          file samba-$SAMBA_VERSION/bin/smbd | grep "ARM" || { echo "未生成ARM架构二进制文件"; exit 1; }
+          file samba-$SAMBA_VERSION/bin/nmbd | grep "ARM" || { echo "未生成ARM架构二进制文件"; exit 1; }
+
+      - name: Upload Samba binaries
         uses: actions/upload-artifact@v4
         with:
-          name: armv7-toolchain
-          path: buildroot-2017.11.1/output/host/
+          name: samba420-armv7-binaries
+          path: |
+            samba-4.20.0/bin/smbd
+            samba-4.20.0/bin/nmbd
+            samba-4.20.0/bin/smbpasswd
           retention-days: 30
