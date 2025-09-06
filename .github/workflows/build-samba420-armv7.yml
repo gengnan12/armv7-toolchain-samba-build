@@ -1,4 +1,4 @@
- name: Build Samba with ARM Official Official Official Toolchain
+name: Build Samba with ARM Official Official Official Toolchain
 on:
   workflow_dispatch:
 
