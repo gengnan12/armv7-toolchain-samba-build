@@ -1,4 +1,4 @@
-name: Build Samba with System ARM Toolchain (Final Source Fix)
+name: Build Samba with System ARM Toolchain (Fix Dependency Conflicts)
 on:
   workflow_dispatch:
 
@@ -10,45 +10,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure architecture-specific sources (最终修复)
+      - name: Configure split-architecture sources
         run: |
-          echo "===== 配置架构专用源 ====="
-          # 1. 为amd64架构创建独立源列表
+          echo "===== 配置分离架构源 ====="
+          # amd64架构源（主机）
           sudo tee /etc/apt/sources.list.d/amd64.list > /dev/null << 'EOF'
           deb http://archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse
           deb http://archive.ubuntu.com/ubuntu/ noble-updates main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu/ noble-backports main restricted universe multiverse
-          deb http://security.ubuntu.com/ubuntu/ noble-security main restricted universe multiverse
           EOF
 
-          # 2. 为armhf架构创建独立源列表（使用ubuntu-ports专用镜像）
+          # armhf架构源（目标）
           sudo tee /etc/apt/sources.list.d/armhf.list > /dev/null << 'EOF'
           deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse
           deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-updates main restricted universe multiverse
-          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-backports main restricted universe multiverse
-          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-security main restricted universe multiverse
           EOF
 
-          # 3. 启用armhf架构
+          # 启用armhf架构
           sudo dpkg --add-architecture armhf
           
-          # 4. 更新源并忽略失败的索引（仅警告不中断）
+          # 更新源并忽略错误
           sudo apt update -y || true
 
-      - name: Install critical dependencies
+      - name: Install base dependencies with version pinning
         run: |
-          echo "===== 安装核心依赖 ====="
-          # 强制安装关键依赖，忽略源索引问题
+          echo "===== 安装基础依赖（带版本锁定） ====="
+          # 手动安装关键依赖并指定兼容版本
           sudo apt install -y -f \
+            # 主机架构依赖
+            python3=3.12.* python3-dev=3.12.* \
+            # ARM架构依赖（指定兼容版本）
+            libc6:armhf=2.31-0ubuntu9.9 \
+            libidn2-0:armhf=2.2.0-2ubuntu2 \
+            zlib1g:armhf=1:1.2.11.dfsg-2ubuntu1.5 \
+            libc6-dev:armhf=2.31-0ubuntu9.9 \
+            # 交叉编译工具链
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
             crossbuild-essential-armhf \
-            libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf \
-            python3 python3-dev pkg-config wget tar xz-utils make
+            # 其他必要工具
+            pkg-config wget tar xz-utils make
 
-          # 验证ARM工具链
+          # 安装剩余ARM开发库
+          sudo apt install -y -f \
+            libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf \
+            libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf
+
+          # 验证工具链
           arm-linux-gnueabihf-gcc --version || { echo "ARM工具链安装失败"; exit 1; }
 
-      - name: Cross-compile GnuTLS (独立于系统源)
+      - name: Cross-compile GnuTLS (独立依赖)
         run: |
           echo "===== 交叉编译GnuTLS ====="
           GNUTLS_VERSION="3.7.9"
