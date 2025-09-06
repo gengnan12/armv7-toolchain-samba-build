@@ -1,4 +1,4 @@
-name: Build Samba with ARM Official Official Official Toolchain
+name: Build Samba with ARM Official Toolchain
 on:
   workflow_dispatch:
 
@@ -14,24 +14,42 @@ jobs:
         run: |
           echo "===== 安装系统依赖 ====="
           sudo apt update -y
-          sudo apt install -y python3 python3-dev libssl-dev pkg-config \
+          sudo apt install -y python3 python3-dev libssl-dev-dev pkg-config \
                               wget tar xz-utils
 
-      - name: Download ARMv7 toolchain from official site
+      - name: Download ARMv7 toolchain (with fallback)
         run: |
-          echo "===== 从ARM官网下载工具链 ====="
-          # ARM官网提供的ARMv7 32位工具链（gnueabihf对应硬浮点）
-          TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu-a/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+          echo "===== 下载ARMv7工具链 ====="
+          # 主链接：ARM官网官网最新最新可用版本（2023-q4）
+          TOOLCHAIN_URLS=(
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://mirrors.tuna.tsinghua.edu.cn/armbian-releases/_toolchains/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+          )
           
-          # 下载并解压到/opt目录
-          wget -q --show-progress -O arm-toolchain.tar.xz $TOOLCHAIN_URL
+          # 循环尝试所有链接
+          for url in "${TOOLCHAIN_URLS[@]}"; do
+            echo "尝试从 $url 下载..."
+            if wget -q --show-progress -O arm-toolchain.tar.xz "$url" --timeout=300; then
+              echo "工具链下载成功"
+              break
+            fi
+          done
+          
+          # 检查下载是否成功
+          if [ ! -f "arm-toolchain.tar.xz" ]; then
+            echo "错误：所有链接均下载失败"
+            exit 1
+          fi
+          
+          # 解压工具链
           sudo mkdir -p /opt/arm-toolchain
           sudo tar -xJf arm-toolchain.tar.xz -C /opt/arm-toolchain --strip-components=1
           
-          # 添加工具链到PATH
+          # 添加到环境变量
           echo "/opt/arm-toolchain/bin" >> $GITHUB_PATH
           
-          # 验证工具链安装
+          # 验证安装
           arm-linux-gnueabihf-gcc --version || { echo "工具链安装失败"; exit 1; }
 
       - name: Download Samba source code
@@ -41,7 +59,6 @@ jobs:
           wget -q --show-progress https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz
           tar -xzf samba-$SAMBA_VERSION.tar.gz
           cd samba-$SAMBA_VERSION
-          # 验证源码完整性
           ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
       - name: Configure Samba for ARMv7
@@ -49,8 +66,6 @@ jobs:
           echo "===== 配置Samba ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
-          
-          # 使用ARM工具链交叉编译配置
           ./configure \
             --host=arm-linux-gnueabihf \
             --prefix=/usr \
@@ -70,7 +85,6 @@ jobs:
           echo "===== 编译Samba ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
-          # 使用2线程编译（避免内存溢出）
           make smbd -j2 V=1
           make nmbd -j2 V=1
           make smbpasswd -j2 V=1
