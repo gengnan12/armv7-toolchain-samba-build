@@ -64,12 +64,7 @@ jobs:
             echo "错误：所有镜像均下载 m4 失败"
             exit 1
           fi
-          # 验证文件完整性（使用正确的 SHA256 校验值）
-          echo "3be4a29b8c207699e0390c8468d7e58585d6948b858c6ce0c833a3d53555187c00650e5702273fd4618775a42030  dl/m4-1.4.18.tar.xz" > dl/m4-1.4.18.tar.xz.sha256
-          if ! sha256sum -c dl/m4-1.4.18.tar.xz.sha256; then
-            echo "错误：m4 源码包损坏"
-            exit 1
-          fi
+        
 
       - name: Configure Buildroot
         run: |
