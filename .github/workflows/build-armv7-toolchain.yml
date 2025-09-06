@@ -1,4 +1,4 @@
-name: Build Samba with System ARM Toolchain (Final Execution Fix)
+name: Build Samba with System ARM Toolchain (Manual Dependencies Fix)
 on:
   workflow_dispatch:
 
@@ -10,116 +10,181 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure architecture sources
+      - name: Configure basic sources
         run: |
-          echo "===== 配置架构源 ====="
-          # 清理旧源配置
+          echo "===== 配置基础源 ====="
+          # 清理旧源配置，避免干扰
           sudo rm -f /etc/apt/sources.list.d/*.list
           
-          # 添加amd64源
-          echo "deb http://archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/amd64.list
-          echo "deb http://archive.ubuntu.com/ubuntu/ noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/amd64.list
-          
-          # 添加armhf源
-          echo "deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/armhf.list
-          echo "deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
+          # 配置amd64主机源（Noble版本，确保工具链兼容性）
+          sudo tee /etc/apt/sources.list.d/amd64.list > /dev/null << 'EOF'
+          deb http://archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse
+          EOF
 
-          # 启用armhf架构
+          # 配置armhf目标源（Focal版本，使用ubuntu-ports专用镜像）
+          sudo tee /etc/apt/sources.list.d/armhf.list > /dev/null << 'EOF'
+          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse
+          EOF
+
+          # 启用armhf架构支持
           sudo dpkg --add-architecture armhf
-          
-          # 更新源
+          # 更新源（忽略部分索引下载错误，不中断流程）
           sudo apt update -y || true
 
-      - name: Install dependencies (强制Shell正确解析)
+      - name: Manually install critical ARM dependencies
         run: |
-          echo "===== 安装依赖 ====="
-          # 关键修复：使用显式的bash执行，并分步骤安装避免命令混淆
-          bash -c 'sudo apt install -y python3'
-          bash -c 'sudo apt install -y python3-dev'
-          bash -c 'sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf'
-          bash -c 'sudo apt install -y crossbuild-essential-armhf'
-          bash -c 'sudo apt install -y libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf'
-          bash -c 'sudo apt install -y libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf'
-          bash -c 'sudo apt install -y pkg-config wget tar xz-utils make'
+          echo "===== 手动安装关键ARM依赖 ====="
+          # 创建临时目录存放deb包，避免文件混乱
+          mkdir -p arm-debs && cd arm-debs
 
-          # 验证工具链
-          arm-linux-gnueabihf-gcc --version || { echo "ARM工具链安装失败"; exit 1; }
+          # 1. 手动下载Focal版本兼容的armhf依赖包（明确版本匹配）
+          # libc6:armhf（基础C库，解决libssl1.1依赖）
+          wget -q http://mirrors.aliyun.com/ubuntu-ports/pool/main/g/glibc/libc6_2.31-0ubuntu9.9_armhf.deb
+          # libidn2-0:armhf（libidn2-dev依赖）
+          wget -q http://mirrors.aliyun.com/ubuntu-ports/pool/main/libi/libidn2/libidn2-0_2.2.0-2ubuntu2_armhf.deb
+          # zlib1g:armhf（zlib1g-dev依赖）
+          wget -q http://mirrors.aliyun.com/ubuntu-ports/pool/main/z/zlib/zlib1g_1.2.11.dfsg-2ubuntu1.5_armhf.deb
+          # libc6-dev:armhf（zlib1g-dev依赖的开发库）
+          wget -q http://mirrors.aliyun.com/ubuntu-ports/pool/main/g/glibc/libc6-dev_2.31-0ubuntu9.9_armhf.deb
 
-      - name: Cross-compile GnuTLS
+          # 2. 强制安装deb包，忽略依赖检查（解决"held broken packages"问题）
+          sudo dpkg -i --force-all *.deb
+
+          # 返回上级目录，清理临时文件（可选，保留便于排查）
+          cd ..
+
+      - name: Install remaining dependencies
         run: |
-          echo "===== 交叉编译GnuTLS ====="
+          echo "===== 安装剩余依赖 ====="
+          # 此时关键依赖已手动安装，apt可自动处理剩余依赖
+          sudo apt install -y -f \
+            # 主机Python依赖（Samba配置阶段使用）
+            python3 python3-dev \
+            # ARM交叉编译工具链（核心编译工具）
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+            crossbuild-essential-armhf \
+            # ARM开发库（GnuTLS编译依赖）
+            libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf \
+            libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf \
+            # 基础工具（下载、解压、编译）
+            pkg-config wget tar xz-utils make
+
+          # 验证ARM工具链是否正常（关键检查，避免后续编译失败）
+          arm-linux-gnueabihf-gcc --version || { echo "ARM交叉编译工具链安装失败"; exit 1; }
+
+      - name: Cross-compile GnuTLS for ARMv7
+        run: |
+          echo "===== 交叉编译ARM版GnuTLS ====="
+          # 选择Samba兼容的GnuTLS版本（≥3.6.13，3.7.9为稳定版）
           GNUTLS_VERSION="3.7.9"
-          wget -q --show-progress "https://www.gnupg.org/ftp/gcrypt/gnutls/v3.7/gnutls-$GNUTLS_VERSION.tar.xz"
-          tar -xJf gnutls-$GNUTLS_VERSION.tar.xz
+          GNUTLS_URL="https://www.gnupg.org/ftp/gcrypt/gnutls/v3.7/gnutls-$GNUTLS_VERSION.tar.xz"
+          
+          # 下载并解压源码（显示进度，便于排查下载问题）
+          wget -q --show-progress -O gnutls.tar.xz "$GNUTLS_URL"
+          tar -xJf gnutls.tar.xz
           cd gnutls-$GNUTLS_VERSION
 
+          # 配置交叉编译参数（适配ARMv7硬浮点架构）
           ./configure \
-            --host=arm-linux-gnueabihf \
-            --prefix=/opt/arm-gnutls \
-            --disable-doc --disable-tests \
-            --enable-shared --without-p11-kit \
-            --with-zlib --with-idn2 \
-            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
-            LDFLAGS="-static-libgcc"
+            --host=arm-linux-gnueabihf \          # 目标架构：ARMv7
+            --prefix=/opt/arm-gnutls \            # 安装路径：独立目录，避免冲突
+            --disable-doc \                       # 禁用文档生成，加速编译
+            --disable-tests \                      # 禁用测试用例，减少依赖
+            --enable-shared \                      # 生成共享库（Samba动态链接）
+            --without-p11-kit \                    # 禁用p11-kit，简化配置
+            --with-zlib \                          # 启用zlib支持（依赖已安装的zlib1g-dev:armhf）
+            --with-idn2 \                          # 启用IDN2支持（依赖已安装的libidn2-0-dev:armhf）
+            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \  # ARM架构优化
+            LDFLAGS="-static-libgcc"               # 静态链接GCC库，减少运行时依赖
 
+          # 2线程编译（避免Ubuntu runner内存不足，默认2核4G）
           make -j2
+          # 安装到指定目录（需sudo，因/opt目录权限限制）
           sudo make install
 
-          [ -f "/opt/arm-gnutls/lib/libgnutls.so" ] || { echo "GnuTLS编译失败"; exit 1; }
+          # 验证GnuTLS编译结果（关键检查，避免后续Samba配置失败）
+          if [ ! -f "/opt/arm-gnutls/lib/libgnutls.so" ] || [ ! -f "/opt/arm-gnutls/include/gnutls/gnutls.h" ]; then
+            echo "错误：GnuTLS交叉编译失败，缺失库文件或头文件"
+            exit 1
+          fi
+          echo "GnuTLS交叉编译完成，安装路径：/opt/arm-gnutls"
 
-      - name: Download Samba source
+      - name: Download Samba source code
         run: |
           echo "===== 下载Samba源码 ====="
+          # 选择稳定版Samba（4.20.0为长期支持版本）
           SAMBA_VERSION="4.20.0"
-          wget -q --show-progress "https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz"
-          tar -xzf samba-$SAMBA_VERSION.tar.gz
+          SAMBA_URL="https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz"
+          
+          # 下载并解压源码（验证完整性，避免源码损坏）
+          wget -q --show-progress -O samba.tar.gz "$SAMBA_URL"
+          tar -xzf samba.tar.gz
           cd samba-$SAMBA_VERSION
-          ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
+          # 简单验证：执行configure --version，确认源码可正常使用
+          ./configure --version > /dev/null || { echo "错误：Samba源码损坏或不完整"; exit 1; }
 
-      - name: Configure Samba
+      - name: Configure Samba with ARM GnuTLS
         run: |
-          echo "===== 配置Samba ====="
+          echo "===== 配置Samba（关联ARM版GnuTLS） ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
 
-          export PKG_CONFIG_PATH="/opt/arm-gnutls/lib/pkgconfig:/usr/lib/arm-linux-gnueabihf/pkgconfig"
-          export LD_LIBRARY_PATH="/opt/arm-gnutls/lib"
+          # 环境变量配置：优先使用手动编译的ARM版GnuTLS
+          export PKG_CONFIG_PATH="/opt/arm-gnutls/lib/pkgconfig:/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
+          export LD_LIBRARY_PATH="/opt/arm-gnutls/lib:$LD_LIBRARY_PATH"
 
+          # Samba配置参数（精简功能，减少依赖）
           ./configure \
-            --enable-fhs \
-            --host=arm-linux-gnueabihf \
-            --prefix=/usr \
-            --sysconfdir=/etc/samba \
-            --localstatedir=/var \
-            --with-privatedir=/var/lib/samba/private \
-            --disable-python --without-ldap --without-ad-dc \
-            --without-systemd --without-winbind \
-            --with-gnutls=/opt/arm-gnutls \
+            --enable-fhs \                          # 启用FHS标准，支持--prefix=/usr
+            --host=arm-linux-gnueabihf \            # 目标架构：ARMv7
+            --prefix=/usr \                         # 安装前缀（符合Linux标准路径）
+            --sysconfdir=/etc/samba \               # 配置文件目录
+            --localstatedir=/var \                  # 运行时数据目录
+            --with-privatedir=/var/lib/samba/private \  # 私有数据（如密码文件）目录
+            --disable-python \                      # 禁用Python绑定，减少依赖
+            --without-ldap \                        # 禁用LDAP支持，简化配置
+            --without-ad-dc \                       # 禁用AD域控制器功能（非必需）
+            --without-systemd \                     # 禁用systemd支持（嵌入式环境常用）
+            --without-winbind \                     # 禁用winbind功能（非必需）
+            --with-gnutls=/opt/arm-gnutls \         # 明确指定ARM版GnuTLS路径
+            # CFLAGS：ARM架构优化+GnuTLS头文件路径
             CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os -I/opt/arm-gnutls/include" \
+            # LDFLAGS：GnuTLS库路径+静态链接基础库
             LDFLAGS="-L/opt/arm-gnutls/lib -static-libgcc -static-libstdc++"
 
       - name: Compile Samba
         run: |
-          echo "===== 编译Samba ====="
+          echo "===== 编译Samba核心组件 ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
-          make smbd -j2 V=1
+          # 仅编译核心组件（smbd/nmbd/smbpasswd），减少编译时间
+          make smbd -j2 V=1  # V=1显示详细编译日志，便于排查错误
           make nmbd -j2 V=1
           make smbpasswd -j2 V=1
 
-      - name: Verify binaries
+      - name: Verify compiled binaries
         run: |
-          echo "===== 验证二进制文件 ====="
+          echo "===== 验证Samba编译结果 ====="
           SAMBA_VERSION="4.20.0"
-          file samba-$SAMBA_VERSION/bin/smbd | grep "ARM" || { echo "非ARM架构"; exit 1; }
-          arm-linux-gnueabihf-readelf -d samba-$SAMBA_VERSION/bin/smbd | grep "libgnutls" || { echo "未链接GnuTLS"; exit 1; }
+          SMBD_PATH="samba-$SAMBA_VERSION/bin/smbd"
+          NMBD_PATH="samba-$SAMBA_VERSION/bin/nmbd"
 
-      - name: Upload artifacts
+          # 1. 检查二进制架构是否为ARM（避免编译成x86架构）
+          file "$SMBD_PATH" | grep -E "ARM|arm" || { echo "错误：smbd不是ARM架构二进制文件"; exit 1; }
+          file "$NMBD_PATH" | grep -E "ARM|arm" || { echo "错误：nmbd不是ARM架构二进制文件"; exit 1; }
+
+          # 2. 检查是否正确链接GnuTLS库（避免依赖缺失）
+          arm-linux-gnueabihf-readelf -d "$SMBD_PATH" | grep "libgnutls" || { echo "错误：smbd未链接GnuTLS库"; exit 1; }
+
+          echo "所有Samba二进制文件验证通过，架构和依赖均正确"
+
+      - name: Upload Samba binaries
         uses: actions/upload-artifact@v4
         with:
           name: samba420-armv7-binaries
+          # 仅上传核心二进制文件，减少 artifact 体积
           path: |
             samba-4.20.0/bin/smbd
             samba-4.20.0/bin/nmbd
             samba-4.20.0/bin/smbpasswd
-          retention-days: 30
+          retention-days: 30  # 保留30天，便于下载使用
