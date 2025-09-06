@@ -77,9 +77,6 @@ jobs:
           ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
       - name: Configure Samba
-        run: "Samba源码损坏"; exit 1; }
-
-      - name: Configure Samba
         run: |
           echo "===== 配置Samba ====="
           SAMBA_VERSION="4.20.0"
