@@ -1,4 +1,4 @@
-name: Build Samba with System ARM Toolchain (Fix Dependency Conflicts)
+name: Build Samba with System ARM Toolchain (Fix Version Syntax)
 on:
   workflow_dispatch:
 
@@ -31,18 +31,18 @@ jobs:
           # 更新源并忽略错误
           sudo apt update -y || true
 
-      - name: Install base dependencies with version pinning
+      - name: Install base dependencies with correct version syntax
         run: |
-          echo "===== 安装基础依赖（带版本锁定） ====="
-          # 手动安装关键依赖并指定兼容版本
+          echo "===== 安装基础依赖（修复版本语法） ====="
+          # 修复版本指定语法，使用apt的版本匹配格式
           sudo apt install -y -f \
-            # 主机架构依赖
-            python3=3.12.* python3-dev=3.12.* \
+            # 主机架构依赖（正确的版本指定方式）
+            "python3=3.12.*" "python3-dev=3.12.*" \
             # ARM架构依赖（指定兼容版本）
-            libc6:armhf=2.31-0ubuntu9.9 \
-            libidn2-0:armhf=2.2.0-2ubuntu2 \
-            zlib1g:armhf=1:1.2.11.dfsg-2ubuntu1.5 \
-            libc6-dev:armhf=2.31-0ubuntu9.9 \
+            "libc6:armhf=2.31-0ubuntu9.9" \
+            "libidn2-0:armhf=2.2.0-2ubuntu2" \
+            "zlib1g:armhf=1:1.2.11.dfsg-2ubuntu1.5" \
+            "libc6-dev:armhf=2.31-0ubuntu9.9" \
             # 交叉编译工具链
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
             crossbuild-essential-armhf \
