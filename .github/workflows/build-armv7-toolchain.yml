@@ -1,22 +1,21 @@
-name: Build ARMv7 Toolchain (Bypass host-m4 compile)
+name: Build ARMv7 Toolchain (Ubuntu 18.04 + Bypass host-m4)
 on:
   workflow_dispatch:
 
 jobs:
   build-toolchain:
-    runs-on: ubuntu-20.04  # 使用更兼容的系统版本
+    runs-on: ubuntu-18.04  # 更换为 Ubuntu 18.04 LTS
     timeout-minutes: 180
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies (使用系统 m4)
+      - name: Install dependencies (适配 Ubuntu 18.04)
         run: |
           echo "===== 安装依赖 ====="
-          # 添加 Python 2.7 源
-          echo "deb http://archive.ubuntu.com/ubuntu/ focal main universe" | sudo tee /etc/apt/sources.list.d/focal-python2.list
+          # Ubuntu 18.04 默认包含 Python 2.7，无需额外添加源
           sudo apt update -y
-          # 安装系统自带的 m4 替代编译版本
+          # 安装系统 m4 + 编译依赖（18.04 源中包名与 20.04 一致）
           sudo apt install -y m4 python2.7 python2.7-dev \
                               build-essential git wget cpio unzip rsync bc \
                               flex bison libssl-dev
@@ -43,13 +42,13 @@ jobs:
         run: |
           echo "===== 绕过 host-m4 编译 ====="
           cd buildroot-2017.11.1
-          # 1. 标记 m4 为已安装
+          # 1. 创建 m4 编译完成标记，欺骗 Buildroot 跳过编译
           mkdir -p output/build/host-m4-1.4.18/
           touch output/build/host-m4-1.4.18/.stamp_installed
           touch output/build/host-m4-1.4.18/.stamp_built
           touch output/build/host-m4-1.4.18/.stamp_extracted
           
-          # 2. 替换 Buildroot 对 m4 的依赖检查
+          # 2. 移除 Makefile 中对 host-m4 的依赖检查
           sed -i 's/host-m4 //' package/Makefile.in
 
       - name: Configure Buildroot
@@ -71,7 +70,7 @@ jobs:
           EOF
           make oldconfig BR2_EXTERNAL=
 
-      - name: Add swap space
+      - name: Add swap space (18.04 同样需要避免内存不足)
         run: |
           sudo fallocate -l 10G /swapfile
           sudo chmod 600 /swapfile
