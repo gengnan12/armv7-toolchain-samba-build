@@ -1,4 +1,4 @@
-name: Build Samba with System ARM Toolchain (Fix Version Syntax)
+name: Build Samba with System ARM Toolchain (Fix Command Parsing)
 on:
   workflow_dispatch:
 
@@ -31,33 +31,31 @@ jobs:
           # 更新源并忽略错误
           sudo apt update -y || true
 
-      - name: Install base dependencies with correct version syntax
+      - name: Install base dependencies (修复命令解析)
         run: |
-          echo "===== 安装基础依赖（修复版本语法） ====="
-          # 修复版本指定语法，使用apt的版本匹配格式
-          sudo apt install -y -f \
-            # 主机架构依赖（正确的版本指定方式）
-            "python3=3.12.*" "python3-dev=3.12.*" \
-            # ARM架构依赖（指定兼容版本）
-            "libc6:armhf=2.31-0ubuntu9.9" \
-            "libidn2-0:armhf=2.2.0-2ubuntu2" \
-            "zlib1g:armhf=1:1.2.11.dfsg-2ubuntu1.5" \
-            "libc6-dev:armhf=2.31-0ubuntu9.9" \
+          echo "===== 安装基础依赖 ====="
+          # 关键修复：使用aptitude强制解决依赖，避免版本指定语法问题
+          sudo apt install -y aptitude
+
+          # 使用aptitude安装，自动处理版本冲突
+          sudo aptitude install -y \
+            # 主机依赖
+            python3 python3-dev \
+            # ARM架构依赖
+            libc6:armhf libidn2-0:armhf zlib1g:armhf libc6-dev:armhf \
             # 交叉编译工具链
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
             crossbuild-essential-armhf \
-            # 其他必要工具
-            pkg-config wget tar xz-utils make
-
-          # 安装剩余ARM开发库
-          sudo apt install -y -f \
+            # 开发库
             libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf \
-            libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf
+            libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf \
+            # 工具
+            pkg-config wget tar xz-utils make
 
           # 验证工具链
           arm-linux-gnueabihf-gcc --version || { echo "ARM工具链安装失败"; exit 1; }
 
-      - name: Cross-compile GnuTLS (独立依赖)
+      - name: Cross-compile GnuTLS
         run: |
           echo "===== 交叉编译GnuTLS ====="
           GNUTLS_VERSION="3.7.9"
