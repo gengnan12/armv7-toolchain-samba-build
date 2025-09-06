@@ -1,92 +1,93 @@
-name: Build Samba 4.20 for ARMv7 (armv7l)
+ name: Build Samba with ARM Official Official Official Toolchain
 on:
-  workflow_dispatch:  # 手动触发（依赖第一步的工具链）
+  workflow_dispatch:
 
 jobs:
   build-samba:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
-      # 步骤1：拉取仓库代码
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 步骤2：下载第一步生成的 ARMv7 工具链
-      - name: Download ARMv7 Toolchain
-        uses: actions/download-artifact@v4
-        with:
-          name: armv7-toolchain  # 必须与工具链编译的 Artifact 名称一致
-          path: ./  # 下载到当前目录
-
-      # 步骤3：解压工具链并配置环境变量
-      - name: Extract & Configure Toolchain
+      - name: Install system dependencies
         run: |
-          # 解压工具链到 /opt 目录（标准路径）
-          sudo mkdir -p /opt/armv7-toolchain
-          sudo tar -xzf armv7-toolchain.tar.gz -C /opt/armv7-toolchain
+          echo "===== 安装系统依赖 ====="
+          sudo apt update -y
+          sudo apt install -y python3 python3-dev libssl-dev pkg-config \
+                              wget tar xz-utils
+
+      - name: Download ARMv7 toolchain from official site
+        run: |
+          echo "===== 从ARM官网下载工具链 ====="
+          # ARM官网提供的ARMv7 32位工具链（gnueabihf对应硬浮点）
+          TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu-a/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
           
-          # 添加工具链到环境变量（让系统找到编译器）
-          echo "/opt/armv7-toolchain/usr/bin" >> $GITHUB_PATH
+          # 下载并解压到/opt目录
+          wget -q --show-progress -O arm-toolchain.tar.xz $TOOLCHAIN_URL
+          sudo mkdir -p /opt/arm-toolchain
+          sudo tar -xJf arm-toolchain.tar.xz -C /opt/arm-toolchain --strip-components=1
           
-          # 自动获取工具链前缀（如 arm-linux-gnueabihf-，避免手动写死）
-          TOOLCHAIN_PREFIX=$(ls /opt/armv7-toolchain/usr/bin | grep "gcc" | sed 's/-gcc//' | head -n1)
-          echo "TOOLCHAIN_PREFIX=$TOOLCHAIN_PREFIX" >> $GITHUB_ENV
-          echo "工具链前缀：$TOOLCHAIN_PREFIX"  # 输出验证（如 arm-linux-gnueabihf-）
+          # 添加工具链到PATH
+          echo "/opt/arm-toolchain/bin" >> $GITHUB_PATH
+          
+          # 验证工具链安装
+          arm-linux-gnueabihf-gcc --version || { echo "工具链安装失败"; exit 1; }
 
-      # 步骤4：安装 Samba 编译依赖
-      - name: Install Samba Dependencies
+      - name: Download Samba source code
         run: |
-          sudo apt update
-          sudo apt install -y python3 python3-dev libssl-dev pkg-config
+          echo "===== 下载Samba源码 ====="
+          SAMBA_VERSION="4.20.0"
+          wget -q --show-progress https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz
+          tar -xzf samba-$SAMBA_VERSION.tar.gz
+          cd samba-$SAMBA_VERSION
+          # 验证源码完整性
+          ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
-      # 步骤5：下载 Samba 4.20 源码（官方稳定版）
-      - name: Download Samba 4.20 Source
+      - name: Configure Samba for ARMv7
         run: |
-          wget https://download.samba.org/pub/samba/stable/samba-4.20.0.tar.gz
-          tar -xzf samba-4.20.0.tar.gz
-          cd samba-4.20.0
-
-      # 步骤6：配置 Samba 4.20（关键！适配 ARMv7 + 旧内核）
-      - name: Configure Samba 4.20
-        run: |
-          cd samba-4.20.0
+          echo "===== 配置Samba ====="
+          SAMBA_VERSION="4.20.0"
+          cd samba-$SAMBA_VERSION
+          
+          # 使用ARM工具链交叉编译配置
           ./configure \
-            --host=${{ env.TOOLCHAIN_PREFIX }}  # 绑定 ARMv7 工具链
-            --prefix=/usr                       # 安装路径（与设备系统一致）
-            --sysconfdir=/etc/samba             # 配置文件路径
-            --localstatedir=/var                # 运行时数据路径
-            --with-privatedir=/var/lib/samba/private  # 私密文件路径
-            --disable-python                    # 禁用 Python 依赖（简化编译）
-            --without-ldap                      # 禁用 LDAP（旧设备无需）
-            --without-ad-dc                     # 禁用 AD 域控制器（旧内核不支持）
-            --with-systemd=no                   # 禁用 systemd（旧系统无 systemd）
-            --without-winbind                   # 禁用 Winbind（减少依赖）
-            CFLAGS="-march=armv7-a -Os"         # ARMv7 架构优化 + 体积压缩
-            LDFLAGS="-static"                   # 静态编译（避免设备缺库）
-            --disable-rpath                     # 禁用动态路径（嵌入式兼容）
+            --host=arm-linux-gnueabihf \
+            --prefix=/usr \
+            --sysconfdir=/etc/samba \
+            --localstatedir=/var \
+            --with-privatedir=/var/lib/samba/private \
+            --disable-python \
+            --without-ldap \
+            --without-ad-dc \
+            --with-systemd=no \
+            --without-winbind \
+            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
+            LDFLAGS="-static-libgcc -static-libstdc++"
 
-      # 步骤7：编译 Samba 4.20（多线程加速）
-      - name: Compile Samba 4.20
+      - name: Compile Samba
         run: |
-          cd samba-4.20.0
-          make -j$(nproc)  # 多线程编译，约30分钟
+          echo "===== 编译Samba ====="
+          SAMBA_VERSION="4.20.0"
+          cd samba-$SAMBA_VERSION
+          # 使用2线程编译（避免内存溢出）
+          make smbd -j2 V=1
+          make nmbd -j2 V=1
+          make smbpasswd -j2 V=1
 
-      # 步骤8：验证编译产物（确保是 ARMv7 架构）
-      - name: Verify Binaries
+      - name: Verify compiled binaries
         run: |
-          cd samba-4.20.0/bin
-          # 检查架构（应输出 "ARM, EABI5, hard-float" 等 ARMv7 信息）
-          file smbd
-          file nmbd
-          # 检查是否静态编译（应输出 "not a dynamic executable"）
-          ${{ env.TOOLCHAIN_PREFIX }}readelf -d smbd | grep "Shared library" || echo "静态编译成功"
+          echo "===== 验证编译结果 ====="
+          SAMBA_VERSION="4.20.0"
+          file samba-$SAMBA_VERSION/bin/smbd | grep "ARM" || { echo "未生成ARM架构二进制文件"; exit 1; }
+          file samba-$SAMBA_VERSION/bin/nmbd | grep "ARM" || { echo "未生成ARM架构二进制文件"; exit 1; }
 
-      # 步骤9：上传 Samba 产物（可直接下载到设备使用）
-      - name: Upload Samba Binaries
+      - name: Upload Samba binaries
         uses: actions/upload-artifact@v4
         with:
-          name: samba420-armv7-binaries  # 产物包名称
+          name: samba420-armv7-binaries
           path: |
-            samba-4.20.0/bin/smbd        # Samba 核心服务
-            samba-4.20.0/bin/nmbd        # NetBIOS 服务
-            samba-4.20.0/bin/smbpasswd   # 密码管理工具
+            samba-4.20.0/bin/smbd
+            samba-4.20.0/bin/nmbd
+            samba-4.20.0/bin/smbpasswd
           retention-days: 30
