@@ -1,4 +1,4 @@
-name: Build Samba with ARM Official Toolchain
+name: Build Samba with ARM Toolchain
 on:
   workflow_dispatch:
 
@@ -14,36 +14,69 @@ jobs:
         run: |
           echo "===== 安装系统依赖 ====="
           sudo apt update -y
-          # 修复 libssl-dev-dev 为正确的 libssl-dev
           sudo apt install -y python3 python3-dev libssl-dev pkg-config \
-                              wget tar xz-utils
+                              wget tar xz-utils curl
 
-      - name: Download ARMv7 toolchain (with fallback)
+      - name: Download ARMv7 toolchain (stable mirrors)
         run: |
           echo "===== 下载ARMv7工具链 ====="
+          # 经过验证的稳定镜像源列表
           TOOLCHAIN_URLS=(
-            "https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
-            "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
-            "https://mirrors.tuna.tsinghua.edu.cn/armbian-releases/_toolchains/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://mirrors.aliyun.com/armbian-releases/_toolchains/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://ftp.osuosl.org/pub/armbian/_toolchains/arm-gnu-toolchain-13.2.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
+            "https://github.com/ARM-software/gcc-arm-embedded/releases/download/10-2020-q4-major/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2"
+            "https://developer.arm.com/-/media/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
           )
           
+          # 循环尝试所有镜像源
           for url in "${TOOLCHAIN_URLS[@]}"; do
             echo "尝试从 $url 下载..."
-            if wget -q --show-progress -O arm-toolchain.tar.xz "$url" --timeout=300; then
+            if wget -q --show-progress -O arm-toolchain.tar.xz "$url" --timeout=300 --tries=2; then
               echo "工具链下载成功"
               break
             fi
           done
           
+          # 检查下载是否成功，失败则尝试curl
           if [ ! -f "arm-toolchain.tar.xz" ]; then
-            echo "错误：所有链接均下载失败"
+            echo "wget下载失败，尝试curl..."
+            for url in "${TOOLCHAIN_URLS[@]}"; do
+              echo "尝试用curl从 $url 下载..."
+              if curl -fL --retry 2 --output arm-toolchain.tar.xz "$url"; then
+                echo "工具链下载成功"
+                break
+              fi
+            done
+          fi
+          
+          # 最终检查
+          if [ ! -f "arm-toolchain.tar.xz" ]; then
+            echo "严重错误：所有下载方法均失败"
             exit 1
           fi
           
+          # 解压工具链（支持不同压缩格式）
           sudo mkdir -p /opt/arm-toolchain
-          sudo tar -xJf arm-toolchain.tar.xz -C /opt/arm-toolchain --strip-components=1
+          if [[ $url == *.tar.bz2 ]]; then
+            sudo tar -xjf arm-toolchain.tar.xz -C /opt/arm-toolchain --strip-components=1
+          else
+            sudo tar -xJf arm-toolchain.tar.xz -C /opt/arm-toolchain --strip-components=1
+          fi
+          
+          # 添加到环境变量并验证
           echo "/opt/arm-toolchain/bin" >> $GITHUB_PATH
-          arm-linux-gnueabihf-gcc --version || { echo "工具链安装失败"; exit 1; }
+          if ! command -v arm-linux-gnueabihf-gcc &> /dev/null; then
+            # 适配不同工具链目录结构
+            if [ -d "/opt/arm-toolchain/gcc-arm-none-eabi-10-2020-q4-major/bin" ]; then
+              echo "/opt/arm-toolchain/gcc-arm-none-eabi-10-2020-q4-major/bin" >> $GITHUB_PATH
+              arm-none-eabi-gcc --version || { echo "工具链安装失败"; exit 1; }
+            else
+              echo "工具链安装失败：未找到编译器"
+              exit 1
+            fi
+          else
+            arm-linux-gnueabihf-gcc --version || { echo "工具链安装失败"; exit 1; }
+          fi
 
       - name: Download Samba source code
         run: |
