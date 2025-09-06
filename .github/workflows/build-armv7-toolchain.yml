@@ -1,4 +1,4 @@
-name: Build Samba with Reliable ARM Toolchain
+name: Build Samba with System ARM Toolchain
 on:
   workflow_dispatch:
 
@@ -10,100 +10,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install system ARM toolchain (关键修复)
         run: |
-          echo "===== 安装系统依赖 ====="
+          echo "===== 安装系统自带的ARM工具链 ====="
           sudo apt update -y
-          sudo apt install -y python3 python3-dev libssl-dev pkg-config \
-                              wget tar xz-utils curl bzip2
-
-      - name: Download ARMv7 toolchain (ultra-reliable sources)
-        run: |
-          echo "===== 下载ARMv7工具链 ====="
-          # 100%可用的工具链源（经过长期验证）
-          TOOLCHAIN_SOURCES=(
-            # 阿里云镜像（国内首选）
-            "https://mirrors.aliyun.com/armbian-releases/_toolchains/arm-gnu-toolchain-12.3.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
-            # 中科大镜像
-            "https://mirrors.ustc.edu.cn/armbian/_toolchains/arm-gnu-toolchain-12.3.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
-            # 官方备份源
-            "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-x86_64-arm-linux-gnueabihf.tar.xz"
-            # 备用版本（确保兼容性）
-            "https://github.com/raspberrypi/tools/archive/refs/tags/1.20230920.tar.gz"
-          )
+          # 安装Ubuntu官方仓库中的ARMv7交叉编译工具链
+          sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
+                              python3 python3-dev libssl-dev pkg-config \
+                              wget tar xz-utils
           
-          # 下载成功标记
-          download_success=0
-          
-          # 尝试所有源
-          for src in "${TOOLCHAIN_SOURCES[@]}"; do
-            echo "尝试从 $src 下载..."
-            filename=$(basename "$src")
-            
-            # 根据文件类型选择下载工具和参数
-            if [[ $src == *.tar.xz ]]; then
-              if wget -q --show-progress -O "$filename" "$src" --timeout=300 --tries=2; then
-                download_success=1
-                break
-              fi
-            elif [[ $src == *.tar.gz ]]; then
-              if curl -fL --retry 2 --output "$filename" "$src"; then
-                download_success=1
-                break
-              fi
-            fi
-          done
-          
-          # 检查下载结果
-          if [ $download_success -eq 0 ]; then
-            echo "错误：所有工具链源均不可用"
-            exit 1
-          fi
-          
-          # 创建工具链目录
-          sudo mkdir -p /opt/arm-toolchain
-          
-          # 解压工具链（处理不同格式）
-          if [[ $filename == *.tar.xz ]]; then
-            sudo tar -xJf "$filename" -C /opt/arm-toolchain --strip-components=1
-          elif [[ $filename == *.tar.gz ]]; then
-            sudo tar -xzf "$filename" -C /opt/arm-toolchain --strip-components=1
-          fi
-          
-          # 查找工具链二进制目录（兼容不同结构）
-          toolchain_bin_path=""
-          if [ -d "/opt/arm-toolchain/bin" ]; then
-            toolchain_bin_path="/opt/arm-toolchain/bin"
-          elif [ -d "/opt/arm-toolchain/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin" ]; then
-            toolchain_bin_path="/opt/arm-toolchain/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin"
-          else
-            # 搜索所有可能的bin目录
-            toolchain_bin_path=$(find /opt/arm-toolchain -type d -name "bin" | grep -i "arm-linux" | head -n 1)
-          fi
-          
-          # 验证工具链路径
-          if [ -z "$toolchain_bin_path" ] || [ ! -d "$toolchain_bin_path" ]; then
-            echo "错误：无法找到工具链二进制目录"
-            exit 1
-          fi
-          
-          # 添加到环境变量
-          echo "$toolchain_bin_path" >> $GITHUB_PATH
-          export PATH="$toolchain_bin_path:$PATH"
-          
-          # 验证编译器
-          compiler=$(find "$toolchain_bin_path" -name "arm-linux-gnueabihf-gcc" -type f | head -n 1)
-          if [ -z "$compiler" ]; then
-            # 尝试备用编译器名称
-            compiler=$(find "$toolchain_bin_path" -name "arm-none-eabi-gcc" -type f | head -n 1)
-          fi
-          
-          if [ -z "$compiler" ] || ! "$compiler" --version > /dev/null; then
-            echo "错误：ARM编译器不可用"
-            exit 1
-          fi
-          
-          echo "工具链安装成功：$compiler"
+          # 验证工具链是否可用
+          arm-linux-gnueabihf-gcc --version || { echo "系统工具链安装失败"; exit 1; }
 
       - name: Download Samba source code
         run: |
