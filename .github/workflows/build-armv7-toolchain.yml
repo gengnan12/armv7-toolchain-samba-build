@@ -10,16 +10,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system ARM toolchain (关键修复)
+      - name: Install system ARM toolchain
         run: |
           echo "===== 安装系统自带的ARM工具链 ====="
           sudo apt update -y
-          # 安装Ubuntu官方仓库中的ARMv7交叉编译工具链
           sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
                               python3 python3-dev libssl-dev pkg-config \
                               wget tar xz-utils
           
-          # 验证工具链是否可用
           arm-linux-gnueabihf-gcc --version || { echo "系统工具链安装失败"; exit 1; }
 
       - name: Download Samba source code
@@ -31,7 +29,7 @@ jobs:
           cd samba-$SAMBA_VERSION
           ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
-      - name: Configure Samba for ARMv7
+      - name: Configure Samba for ARMv7 (修复systemd选项)
         run: |
           echo "===== 配置Samba ====="
           SAMBA_VERSION="4.20.0"
@@ -45,7 +43,7 @@ jobs:
             --disable-python \
             --without-ldap \
             --without-ad-dc \
-            --with-systemd=no \
+            --with-systemd \  # 修复：移除参数值，仅保留选项
             --without-winbind \
             CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
             LDFLAGS="-static-libgcc -static-libstdc++"
