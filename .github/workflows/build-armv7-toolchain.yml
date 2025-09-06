@@ -1,4 +1,4 @@
-name: Build Samba with System ARM Toolchain (Fix Python Execution Error)
+name: Build Samba with System ARM Toolchain (Final Execution Fix)
 on:
   workflow_dispatch:
 
@@ -10,20 +10,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure split-architecture sources
+      - name: Configure architecture sources
         run: |
-          echo "===== 配置分离架构源 ====="
-          # amd64架构源（主机）
-          sudo tee /etc/apt/sources.list.d/amd64.list > /dev/null << 'EOF'
-          deb http://archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu/ noble-updates main restricted restricted universe multiverse
-          EOF
-
-          # armhf架构源（目标）
-          sudo tee /etc/apt/sources.list.d/armhf.list > /dev/null << 'EOF'
-          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse
-          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-updates main restricted universe multiverse
-          EOF
+          echo "===== 配置架构源 ====="
+          # 清理旧源配置
+          sudo rm -f /etc/apt/sources.list.d/*.list
+          
+          # 添加amd64源
+          echo "deb http://archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/amd64.list
+          echo "deb http://archive.ubuntu.com/ubuntu/ noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/amd64.list
+          
+          # 添加armhf源
+          echo "deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/armhf.list
+          echo "deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
 
           # 启用armhf架构
           sudo dpkg --add-architecture armhf
@@ -31,34 +30,19 @@ jobs:
           # 更新源
           sudo apt update -y || true
 
-      - name: Install dependencies (修复命令格式)
+      - name: Install dependencies (强制Shell正确解析)
         run: |
           echo "===== 安装依赖 ====="
-          # 关键修复：使用明确的apt命令，避免被解析为Python脚本
-          sudo apt-get install -y \
-            --no-install-recommends \
-            # 主机依赖
-            python3 \
-            python3-dev \
-            # ARM交叉编译工具链
-            gcc-arm-linux-gnueabihf \
-            g++-arm-linux-gnueabihf \
-            crossbuild-essential-armhf \
-            # ARM开发库
-            libssl-dev:armhf \
-            zlib1g-dev:armhf \
-            libidn2-0-dev:armhf \
-            libtasn1-6-dev:armhf \
-            libnettle8:armhf \
-            libhogweed6:armhf \
-            # 基础工具
-            pkg-config \
-            wget \
-            tar \
-            xz-utils \
-            make
+          # 关键修复：使用显式的bash执行，并分步骤安装避免命令混淆
+          bash -c 'sudo apt install -y python3'
+          bash -c 'sudo apt install -y python3-dev'
+          bash -c 'sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf'
+          bash -c 'sudo apt install -y crossbuild-essential-armhf'
+          bash -c 'sudo apt install -y libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf'
+          bash -c 'sudo apt install -y libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf'
+          bash -c 'sudo apt install -y pkg-config wget tar xz-utils make'
 
-          # 验证ARM工具链
+          # 验证工具链
           arm-linux-gnueabihf-gcc --version || { echo "ARM工具链安装失败"; exit 1; }
 
       - name: Cross-compile GnuTLS
@@ -72,12 +56,9 @@ jobs:
           ./configure \
             --host=arm-linux-gnueabihf \
             --prefix=/opt/arm-gnutls \
-            --disable-doc \
-            --disable-tests \
-            --enable-shared \
-            --without-p11-kit \
-            --with-zlib \
-            --with-idn2 \
+            --disable-doc --disable-tests \
+            --enable-shared --without-p11-kit \
+            --with-zlib --with-idn2 \
             CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
             LDFLAGS="-static-libgcc"
 
@@ -96,6 +77,9 @@ jobs:
           ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
       - name: Configure Samba
+        run: "Samba源码损坏"; exit 1; }
+
+      - name: Configure Samba
         run: |
           echo "===== 配置Samba ====="
           SAMBA_VERSION="4.20.0"
@@ -111,11 +95,8 @@ jobs:
             --sysconfdir=/etc/samba \
             --localstatedir=/var \
             --with-privatedir=/var/lib/samba/private \
-            --disable-python \
-            --without-ldap \
-            --without-ad-dc \
-            --without-systemd \
-            --without-winbind \
+            --disable-python --without-ldap --without-ad-dc \
+            --without-systemd --without-winbind \
             --with-gnutls=/opt/arm-gnutls \
             CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os -I/opt/arm-gnutls/include" \
             LDFLAGS="-L/opt/arm-gnutls/lib -static-libgcc -static-libstdc++"
