@@ -1,4 +1,4 @@
-name: Build Samba with System ARM Toolchain (ARM Mirror Fix)
+name: Build Samba with System ARM Toolchain (Final Source Fix)
 on:
   workflow_dispatch:
 
@@ -10,40 +10,45 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Use ARM-specific mirrors (修复404错误)
+      - name: Configure architecture-specific sources (最终修复)
         run: |
-          echo "===== 配置ARM专用镜像源 ====="
-          # 使用阿里云ARM镜像（稳定支持armhf架构）
-          sudo tee /etc/apt/sources.list > /dev/null << 'EOF'
-          # 阿里云Focal ARM镜像
-          deb http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse
-          deb http://mirrors.aliyun.com/ubuntu-ports/ focal-updates main restricted universe multiverse
-          deb http://mirrors.aliyun.com/ubuntu-ports/ focal-backports main restricted universe multiverse
-          deb http://mirrors.aliyun.com/ubuntu-ports/ focal-security main restricted universe multiverse
+          echo "===== 配置架构专用源 ====="
+          # 1. 为amd64架构创建独立源列表
+          sudo tee /etc/apt/sources.list.d/amd64.list > /dev/null << 'EOF'
+          deb http://archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu/ noble-updates main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu/ noble-backports main restricted universe multiverse
+          deb http://security.ubuntu.com/ubuntu/ noble-security main restricted universe multiverse
           EOF
 
-          # 启用armhf架构
+          # 2. 为armhf架构创建独立源列表（使用ubuntu-ports专用镜像）
+          sudo tee /etc/apt/sources.list.d/armhf.list > /dev/null << 'EOF'
+          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal main restricted universe multiverse
+          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-updates main restricted universe multiverse
+          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-backports main restricted universe multiverse
+          deb [arch=armhf] http://mirrors.aliyun.com/ubuntu-ports/ focal-security main restricted universe multiverse
+          EOF
+
+          # 3. 启用armhf架构
           sudo dpkg --add-architecture armhf
           
-          # 更新源（使用阿里云镜像避免404）
-          sudo apt update -y || {
-            echo "尝试备用更新命令"
-            sudo apt update -y --fix-missing
-          }
+          # 4. 更新源并忽略失败的索引（仅警告不中断）
+          sudo apt update -y || true
 
-      - name: Install ARM dependencies
+      - name: Install critical dependencies
         run: |
-          echo "===== 安装ARM依赖 ====="
+          echo "===== 安装核心依赖 ====="
+          # 强制安装关键依赖，忽略源索引问题
           sudo apt install -y -f \
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
             crossbuild-essential-armhf \
             libssl-dev:armhf zlib1g-dev:armhf libidn2-0-dev:armhf \
-            libtasn1-6-dev:armhf libnettle8:armhf libhogweed6:armhf \
             python3 python3-dev pkg-config wget tar xz-utils make
 
+          # 验证ARM工具链
           arm-linux-gnueabihf-gcc --version || { echo "ARM工具链安装失败"; exit 1; }
 
-      - name: Cross-compile GnuTLS for ARMv7
+      - name: Cross-compile GnuTLS (独立于系统源)
         run: |
           echo "===== 交叉编译GnuTLS ====="
           GNUTLS_VERSION="3.7.9"
