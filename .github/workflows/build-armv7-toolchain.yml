@@ -1,23 +1,25 @@
-name: Build ARMv7 Toolchain (Fix m4 download error)
+name: Build ARMv7 Toolchain (Bypass host-m4 compile)
 on:
   workflow_dispatch:
 
 jobs:
   build-toolchain:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04  # 使用更兼容的系统版本
     timeout-minutes: 180
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (使用系统 m4)
         run: |
           echo "===== 安装依赖 ====="
+          # 添加 Python 2.7 源
           echo "deb http://archive.ubuntu.com/ubuntu/ focal main universe" | sudo tee /etc/apt/sources.list.d/focal-python2.list
           sudo apt update -y
-          sudo apt install -y python2.7 python2.7-dev \
+          # 安装系统自带的 m4 替代编译版本
+          sudo apt install -y m4 python2.7 python2.7-dev \
                               build-essential git wget cpio unzip rsync bc \
-                              flex bison libssl-dev m4
+                              flex bison libssl-dev
 
       - name: Download and extract Buildroot
         run: |
@@ -37,34 +39,18 @@ jobs:
           cd buildroot-2017.11.1
           make distclean > /dev/null 2>&1 || true
 
-      - name: Fix m4 source package (确保下载成功)
+      - name: Bypass host-m4 compilation (关键修复)
         run: |
-          echo "===== 修复 m4 源码包 ====="
+          echo "===== 绕过 host-m4 编译 ====="
           cd buildroot-2017.11.1
-          # 创建 dl 目录（如果不存在）
-          mkdir -p dl
-          # 删除可能损坏的文件
-          rm -f dl/m4-1.4.18.tar.xz
-          # 从多个镜像下载，增加成功率
-          M4_URLS=(
-            "https://mirror.tuna.tsinghua.edu.cn/gnu/m4/m4-1.4.18.tar.xz"
-            "https://ftp.gnu.org/gnu/m4/m4-1.4.18.tar.xz"
-            "https://mirrors.ustc.edu.cn/gnu/m4/m4-1.4.18.tar.xz"
-          )
-          # 循环尝试所有镜像
-          for url in "${M4_URLS[@]}"; do
-            echo "尝试从 $url 下载..."
-            if wget -O dl/m4-1.4.18.tar.xz "$url" --timeout=300 --tries=2; then
-              echo "m4 源码包下载成功"
-              break
-            fi
-          done
-          # 验证文件是否存在
-          if [ ! -f "dl/m4-1.4.18.tar.xz" ]; then
-            echo "错误：所有镜像均下载 m4 失败"
-            exit 1
-          fi
-        
+          # 1. 标记 m4 为已安装
+          mkdir -p output/build/host-m4-1.4.18/
+          touch output/build/host-m4-1.4.18/.stamp_installed
+          touch output/build/host-m4-1.4.18/.stamp_built
+          touch output/build/host-m4-1.4.18/.stamp_extracted
+          
+          # 2. 替换 Buildroot 对 m4 的依赖检查
+          sed -i 's/host-m4 //' package/Makefile.in
 
       - name: Configure Buildroot
         run: |
