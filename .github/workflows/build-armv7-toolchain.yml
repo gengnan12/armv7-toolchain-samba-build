@@ -1,60 +1,110 @@
-name: Build Samba with System ARM Toolchain
+name: Build Samba with System ARM Toolchain (Fix GnuTLS)
 on:
   workflow_dispatch:
 
 jobs:
   build-samba:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system ARM toolchain
+      - name: Install base dependencies
         run: |
-          echo "===== 安装系统自带的ARM工具链 ====="
+          echo "===== 安装基础依赖 ====="
           sudo apt update -y
+          # 安装ARM交叉编译工具链、系统依赖及交叉编译基础包
           sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
                               python3 python3-dev libssl-dev pkg-config \
-                              wget tar xz-utils
+                              wget tar xz-utils make \
+                              crossbuild-essential-armhf \
+                              zlib1g-dev:armhf libidn2-0-dev:armhf  # GnuTLS依赖的ARM库
 
-          arm-linux-gnueabihf-gcc --version || { echo "系统工具链安装失败"; exit 1; }
+          # 验证工具链可用性
+          arm-linux-gnueabihf-gcc --version || { echo "ARM工具链安装失败"; exit 1; }
+
+      - name: Cross-compile GnuTLS for ARMv7
+        run: |
+          echo "===== 交叉编译ARM版GnuTLS ====="
+          # 选择高于3.6.13的稳定版本（3.7.9兼容性好）
+          GNUTLS_VERSION="3.7.9"
+          GNUTLS_URL="https://www.gnupg.org/ftp/gcrypt/gnutls/v3.7/gnutls-$GNUTLS_VERSION.tar.xz"
+          
+          # 下载并解压GnuTLS源码
+          wget -q --show-progress -O gnutls.tar.xz "$GNUTLS_URL"
+          tar -xJf gnutls.tar.xz
+          cd gnutls-$GNUTLS_VERSION
+
+          # 交叉编译配置：指定ARM目标架构，禁用非必需功能减少依赖
+          ./configure \
+            --host=arm-linux-gnueabihf \
+            --prefix=/opt/arm-gnutls \  # 安装到独立目录，避免与主机库冲突
+            --disable-doc \             # 禁用文档生成，加速编译
+            --disable-tests \           # 禁用测试，减少编译时间
+            --enable-shared \           # 生成共享库
+            --without-p11-kit \         # 禁用p11-kit依赖（简化配置）
+            --with-zlib \               # 启用zlib支持
+            --with-idn2 \               # 启用IDN2支持（依赖已安装的libidn2-0-dev:armhf）
+            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
+            LDFLAGS="-static-libgcc"
+
+          # 编译并安装（2线程避免内存溢出）
+          make -j2
+          sudo make install
+
+          # 验证GnuTLS安装结果
+          if [ ! -f "/opt/arm-gnutls/lib/libgnutls.so" ] || [ ! -f "/opt/arm-gnutls/include/gnutls/gnutls.h" ]; then
+            echo "GnuTLS交叉编译失败：未生成库文件或头文件"
+            exit 1
+          fi
+          echo "GnuTLS交叉编译完成，安装路径：/opt/arm-gnutls"
 
       - name: Download Samba source code
         run: |
           echo "===== 下载Samba源码 ====="
           SAMBA_VERSION="4.20.0"
-          wget -q --show-progress https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz
-          tar -xzf samba-$SAMBA_VERSION.tar.gz
+          SAMBA_URL="https://download.samba.org/pub/samba/stable/samba-$SAMBA_VERSION.tar.gz"
+          
+          wget -q --show-progress -O samba.tar.gz "$SAMBA_URL"
+          tar -xzf samba.tar.gz
           cd samba-$SAMBA_VERSION
+          # 验证源码完整性
           ./configure --version > /dev/null || { echo "Samba源码损坏"; exit 1; }
 
-      - name: Configure Samba for ARMv7 (修复prefix问题)
+      - name: Configure Samba with ARM GnuTLS
         run: |
-          echo "===== 配置Samba ====="
+          echo "===== 配置Samba（引用ARM版GnuTLS） ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
-          # 关键修复：调整选项顺序，确保--enable-fhs在--prefix之前
+
+          # 配置环境变量：让pkg-config找到ARM版GnuTLS，避免引用主机库
+          export PKG_CONFIG_PATH="/opt/arm-gnutls/lib/pkgconfig:/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
+          export LD_LIBRARY_PATH="/opt/arm-gnutls/lib:$LD_LIBRARY_PATH"
+
+          # Samba配置：明确指定GnuTLS路径，启用FHS模式解决prefix问题
           ./configure \
-            --enable-fhs \                   # FHS选项前置，优先生效
+            --enable-fhs \
             --host=arm-linux-gnueabihf \
             --prefix=/usr \
             --sysconfdir=/etc/samba \
             --localstatedir=/var \
             --with-privatedir=/var/lib/samba/private \
-            --disable-python \               # 明确禁用Python以避免相关依赖问题
-            --without-ldap \
-            --without-ad-dc \
-            --without-systemd \
-            --without-winbind \
-            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os" \
-            LDFLAGS="-static-libgcc -static-libstdc++"
+            --disable-python \               # 禁用Python减少依赖
+            --without-ldap \                 # 禁用LDAP简化配置
+            --without-ad-dc \                # 禁用AD域控制器功能
+            --without-systemd \              # 禁用systemd支持
+            --without-winbind \              # 禁用winbind功能
+            --with-gnutls=/opt/arm-gnutls \  # 明确指定ARM版GnuTLS路径
+            CFLAGS="-march=armv7-a -mfpu=neon -mfloat-abi=hard -Os -I/opt/arm-gnutls/include" \
+            LDFLAGS="-L/opt/arm-gnutls/lib -static-libgcc -static-libstdc++"
 
       - name: Compile Samba
         run: |
           echo "===== 编译Samba ====="
           SAMBA_VERSION="4.20.0"
           cd samba-$SAMBA_VERSION
+          # 2线程编译，避免ubuntu-latest环境内存不足
           make smbd -j2 V=1
           make nmbd -j2 V=1
           make smbpasswd -j2 V=1
@@ -63,8 +113,11 @@ jobs:
         run: |
           echo "===== 验证编译结果 ====="
           SAMBA_VERSION="4.20.0"
-          file samba-$SAMBA_VERSION/bin/smbd | grep "ARM" || { echo "未生成ARM架构二进制文件"; exit 1; }
-          file samba-$SAMBA_VERSION/bin/nmbd | grep "ARM" || { echo "未生成ARM架构二进制文件"; exit 1; }
+          # 检查二进制文件是否为ARM架构
+          file samba-$SAMBA_VERSION/bin/smbd | grep -E "ARM|arm" || { echo "smbd非ARM架构"; exit 1; }
+          file samba-$SAMBA_VERSION/bin/nmbd | grep -E "ARM|arm" || { echo "nmbd非ARM架构"; exit 1; }
+          # 检查是否链接了正确的GnuTLS库
+          arm-linux-gnueabihf-readelf -d samba-$SAMBA_VERSION/bin/smbd | grep "libgnutls" || { echo "smbd未链接GnuTLS"; exit 1; }
 
       - name: Upload Samba binaries
         uses: actions/upload-artifact@v4
